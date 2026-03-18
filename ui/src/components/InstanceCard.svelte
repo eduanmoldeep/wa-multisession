@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import * as api from '../lib/api.js';
 
-  export let instance = { id: '', status: '', qr: null };
+  export let instance = { id: '', status: '', qr: null, linkedAccount: null, linkedAccountChanged: false, previousLinkedAccount: null };
   export let canDelete = true;
 
   const dispatch = createEventDispatcher();
@@ -92,6 +92,10 @@
   $: cardClass = instance.status === 'ready' ? 'active' : instance.status === 'qr_ready' ? 'pending' : '';
   $: statusClass = `status-${instance.status}`;
   $: isReady = instance.status === 'ready';
+  $: apiKeyInputId = `api-key-input-${instance.id}`;
+  $: linkedAccountLabel = instance.linkedAccount?.label || instance.linkedAccount?.name || instance.linkedAccount?.number || '';
+  $: previousLinkedAccountLabel =
+    instance.previousLinkedAccount?.label || instance.previousLinkedAccount?.name || instance.previousLinkedAccount?.number || '';
 </script>
 
 <div class="instance-card {cardClass}">
@@ -114,14 +118,29 @@
     {/if}
   {/if}
 
+  <div class="instance-api-section">
+    <h4 style="font-size: 13px; color: #555; margin-bottom: 8px;">Linked WhatsApp</h4>
+    {#if linkedAccountLabel}
+      <p class="linked-account-value">{linkedAccountLabel}</p>
+      {#if instance.linkedAccountChanged && previousLinkedAccountLabel}
+        <p class="linked-account-warning">
+          This instance was re-linked from {previousLinkedAccountLabel}. Older message log entries may belong to the previous account.
+        </p>
+      {/if}
+    {:else}
+      <p class="linked-account-empty">No linked account detected yet. Scan the QR code and wait for the instance to become ready.</p>
+    {/if}
+  </div>
+
   <!-- API key: always visible for every instance -->
   <div class="instance-api-section">
     <h4 style="font-size: 13px; color: #555; margin-bottom: 8px;">View API key</h4>
     <p style="font-size: 11px; color: #888; margin-bottom: 8px;">Use header <code>X-API-Key: &lt;key&gt;</code> for instance API calls.</p>
     <div class="api-key-actions">
-      <label class="api-key-label">View / modify key</label>
+      <label class="api-key-label" for={apiKeyInputId}>View / modify key</label>
       <div class="api-key-row">
         <input
+          id={apiKeyInputId}
           type="text"
           class="api-key-input"
           readonly
@@ -242,6 +261,26 @@
     color: #059669;
     font-size: 13px;
     margin-top: 6px;
+  }
+  .linked-account-value {
+    color: #111827;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .linked-account-empty {
+    color: #6b7280;
+    font-size: 12px;
+    margin: 0;
+  }
+  .linked-account-warning {
+    color: #9a3412;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-radius: 6px;
+    font-size: 12px;
+    margin: 8px 0 0;
+    padding: 8px 10px;
   }
   .toast {
     font-size: 12px;

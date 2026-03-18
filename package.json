@@ -13,14 +13,17 @@
     "preview:ui": "cd ui && pnpm run preview"
   },
   "dependencies": {
+    "bcrypt": "^5.1.1",
     "better-sqlite3": "^11.6.0",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
     "express": "^4.18.2",
     "express-session": "^1.17.3",
-    "bcrypt": "^5.1.1",
-    "whatsapp-web.js": "^1.23.0",
     "qrcode": "^1.5.3",
-    "ws": "^8.14.2",
-    "dotenv": "^16.4.7"
+    "whatsapp-web.js": "^1.23.0",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

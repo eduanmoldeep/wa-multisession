@@ -227,3 +227,12 @@ export async function getInstanceMessages(instanceId, limit = 500) {
     throw new Error('Invalid response from server');
   }
 }
+
+export async function clearInstanceMessages(instanceId) {
+  const res = await apiFetch(`${API_BASE}/api/instances/${instanceId}/messages`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to clear message log');
+  }
+  return data;
+}

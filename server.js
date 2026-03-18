@@ -118,6 +118,91 @@ async function saveInstanceNames(names) {
   await writeFile(INSTANCES_FILE, JSON.stringify(names, null, 2), 'utf-8');
 }
 
+function sameLinkedAccount(left, right) {
+  if (!left || !right) return false;
+  if (left.jid && right.jid) return left.jid === right.jid;
+  if (left.number && right.number) return left.number === right.number;
+  return false;
+}
+
+function getLinkedAccountLabel(account) {
+  if (!account) return null;
+  if (account.name && account.number) return `${account.name} (${account.number})`;
+  return account.name || account.number || account.jid || null;
+}
+
+function getClientLinkedAccount(client) {
+  const info = client?.info;
+  const jid = info?.wid?._serialized || null;
+  const number = info?.wid?.user || (jid ? jid.replace(/@.*$/, '') : null);
+  const name = info?.pushname || null;
+  if (!jid && !number && !name) return null;
+  return {
+    jid,
+    number,
+    name,
+    label: getLinkedAccountLabel({ jid, number, name })
+  };
+}
+
+function toPublicLinkedAccount(account) {
+  if (!account) return null;
+  return {
+    jid: account.jid || null,
+    number: account.number || null,
+    name: account.name || null,
+    label: account.label || getLinkedAccountLabel(account)
+  };
+}
+
+function classifyMessageKind(fromJid, isStatus = false) {
+  if (isStatus) return 'status';
+  const jid = typeof fromJid === 'string' ? fromJid : '';
+  if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) return 'status';
+  if (jid.endsWith('@g.us')) return 'group';
+  return 'individual';
+}
+
+async function syncInstanceLinkedAccount(instanceId) {
+  const instance = whatsappInstances.get(instanceId);
+  if (!instance) return;
+  const current = getClientLinkedAccount(instance.client);
+  const previous = db.getInstanceLinkedAccount(instanceId);
+
+  instance.previousLinkedAccount = null;
+  instance.linkedAccountChanged = false;
+
+  if (!current) {
+    instance.linkedAccount = previous ? toPublicLinkedAccount(previous) : null;
+    return;
+  }
+
+  const currentPublic = toPublicLinkedAccount(current);
+  if (previous && !sameLinkedAccount(previous, currentPublic)) {
+    instance.previousLinkedAccount = toPublicLinkedAccount(previous);
+    instance.linkedAccountChanged = true;
+    console.warn(
+      `[instance] ${instanceId} re-linked from ${getLinkedAccountLabel(previous)} to ${getLinkedAccountLabel(currentPublic)}`
+    );
+  }
+
+  instance.linkedAccount = currentPublic;
+  db.setInstanceLinkedAccount(instanceId, currentPublic);
+}
+
+function serializeInstance(instanceId, includeQr = false) {
+  const instance = whatsappInstances.get(instanceId);
+  if (!instance) return null;
+  return {
+    id: instanceId,
+    status: instance.status,
+    linkedAccount: instance.linkedAccount || null,
+    linkedAccountChanged: Boolean(instance.linkedAccountChanged),
+    previousLinkedAccount: instance.previousLinkedAccount || null,
+    ...(includeQr ? { qr: instance.qr } : {})
+  };
+}
+
 // Authentication middleware
 function requireAuth(req, res, next) {
   if (!req.session.userId) {
@@ -217,10 +302,7 @@ app.get('/api/instances', requireAuth, (req, res) => {
   const allIds = Array.from(whatsappInstances.keys());
   const allowedIds = db.getInstanceIdsForUser(req.user.id, req.user.role);
   const ids = allowedIds === null ? allIds : allIds.filter(id => allowedIds.includes(id));
-  const instances = ids.map(id => ({
-    id,
-    status: whatsappInstances.get(id).status
-  }));
+  const instances = ids.map((id) => serializeInstance(id)).filter(Boolean);
   res.json(instances);
 });
 
@@ -235,7 +317,10 @@ async function createAndInitializeInstance(instanceId) {
   const instance = {
     client,
     status: 'initializing',
-    qr: null
+    qr: null,
+    linkedAccount: toPublicLinkedAccount(db.getInstanceLinkedAccount(instanceId)),
+    linkedAccountChanged: false,
+    previousLinkedAccount: null
   };
 
   whatsappInstances.set(instanceId, instance);
@@ -249,13 +334,27 @@ async function createAndInitializeInstance(instanceId) {
     console.log(`QR code generated for instance ${instanceId}`);
     console.log(qr);
     const qrDataUrl = await QRCode.toDataURL(qr);
-    broadcastToInstance(instanceId, { type: 'qr', instanceId, qr: qrDataUrl });
+    broadcastToInstance(instanceId, {
+      type: 'qr',
+      instanceId,
+      qr: qrDataUrl,
+      linkedAccount: instance.linkedAccount,
+      linkedAccountChanged: instance.linkedAccountChanged,
+      previousLinkedAccount: instance.previousLinkedAccount
+    });
   });
 
-  client.on('ready', () => {
+  client.on('ready', async () => {
     instance.status = 'ready';
     instance.qr = null;
-    broadcastToInstance(instanceId, { type: 'ready', instanceId });
+    await syncInstanceLinkedAccount(instanceId);
+    broadcastToInstance(instanceId, {
+      type: 'ready',
+      instanceId,
+      linkedAccount: instance.linkedAccount,
+      linkedAccountChanged: instance.linkedAccountChanged,
+      previousLinkedAccount: instance.previousLinkedAccount
+    });
   });
 
   client.on('authenticated', () => {
@@ -277,21 +376,39 @@ async function createAndInitializeInstance(instanceId) {
     const fromJid = message.from || null;
     const body = message.body || '';
     const messageTimestamp = message.timestamp != null ? Number(message.timestamp) : null;
+    const messageKind = classifyMessageKind(fromJid, Boolean(message.isStatus));
+    let groupName = null;
+    let senderNumber = null;
+
+    if (messageKind === 'group') {
+      try {
+        const chat = await message.getChat();
+        groupName = chat?.name || null;
+      } catch {
+        groupName = null;
+      }
+    }
 
     let senderDisplay = fromJid;
     try {
       const contact = await message.getContact();
+      senderNumber = contact?.number || (message.author ? String(message.author).replace(/@.*$/, '') : null);
       if (contact && (contact.pushname || contact.name || contact.number)) {
         senderDisplay = contact.pushname || contact.name || contact.number || fromJid;
       } else if (fromJid) {
         senderDisplay = fromJid.replace('@c.us', '').replace('@g.us', '');
       }
     } catch {
+      senderNumber = message.author ? String(message.author).replace(/@.*$/, '') : null;
       if (fromJid) senderDisplay = fromJid.replace('@c.us', '').replace('@g.us', '');
     }
 
+    if (!senderNumber && fromJid && fromJid.endsWith('@c.us')) {
+      senderNumber = fromJid.replace('@c.us', '');
+    }
+
     try {
-      db.insertMessage(instanceId, messageIdSerialized, fromJid, senderDisplay, body, messageTimestamp);
+      db.insertMessage(instanceId, messageIdSerialized, fromJid, senderDisplay, senderNumber, groupName, body, messageTimestamp, 'native', messageKind);
     } catch (e) {
       console.error(`[message] instance=${instanceId} insertMessage failed:`, e.message);
     }
@@ -309,7 +426,11 @@ async function createAndInitializeInstance(instanceId) {
       isStatus: Boolean(message.isStatus),
       isForwarded: Boolean(message.isForwarded),
       hasQuotedMsg: Boolean(message.hasQuotedMsg),
-      senderDisplay
+      senderDisplay,
+      senderNumber,
+      groupName,
+      source: 'native',
+      messageKind
     };
     broadcastToInstance(instanceId, { type: 'message', instanceId, message: payload }, 'native');
   });
@@ -359,6 +480,7 @@ app.delete('/api/instances/:instanceId', requireAdmin, async (req, res) => {
     whatsappInstances.delete(instanceId);
     instanceClients.delete(instanceId);
     db.deleteInstanceApiKey(instanceId);
+    db.deleteInstanceLinkedAccount(instanceId);
     db.deleteMessagesForInstance(instanceId);
 
     const names = await loadInstanceNames();
@@ -474,11 +596,22 @@ app.get('/api/instances/:instanceId/messages', requireInstanceAccess, (req, res)
     messageId: r.message_id,
     from: r.from_jid,
     senderDisplay: r.sender_display,
+    senderNumber: r.sender_number || null,
+    groupName: r.group_name || null,
     body: r.body,
+    source: r.source || 'native',
+    messageKind: r.message_kind || classifyMessageKind(r.from_jid),
     timestamp: r.message_timestamp,
     createdAt: r.created_at
   }));
   res.json(messages);
+});
+
+app.delete('/api/instances/:instanceId/messages', requireInstanceAccess, (req, res) => {
+  const instanceId = req.instanceId;
+  const cleared = db.deleteMessagesForInstance(instanceId);
+  broadcastToInstance(instanceId, { type: 'messages_cleared', instanceId });
+  res.json({ success: true, cleared });
 });
 
 // WaHub webhook: receive incoming message events for an instance (API key auth only). See wahub_webhook.md.
@@ -487,11 +620,13 @@ function normalizeWebhookMessage(obj) {
   const rawFrom =
     obj.from ??
     obj.sender ??
-    (obj.remoteJid ? String(obj.remoteJid).replace(/@.*$/, '') : null) ??
-    (obj.key && (obj.key.remoteJid || obj.key.from) ? String(obj.key.remoteJid || obj.key.from).replace(/@.*$/, '') : null) ??
+    (obj.remoteJid ? String(obj.remoteJid) : null) ??
+    (obj.key && (obj.key.remoteJid || obj.key.from) ? String(obj.key.remoteJid || obj.key.from) : null) ??
     null;
-  const from = rawFrom ? String(rawFrom).replace(/\D/g, '') : null;
-  if (!from) return null;
+  if (!rawFrom) return null;
+  const rawFromStr = String(rawFrom);
+  const fromJid = rawFromStr.includes('@') ? rawFromStr : `${rawFromStr.replace(/\D/g, '')}@c.us`;
+  if (!fromJid || fromJid === '@c.us') return null;
   const body =
     obj.body ??
     obj.text ??
@@ -500,8 +635,35 @@ function normalizeWebhookMessage(obj) {
     '';
   const id = obj.id ?? obj.messageId ?? obj.key?.id ?? null;
   const messageId = id != null ? String(id) : `webhook-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const fromJid = from.includes('@') ? from : `${from}@c.us`;
-  return { fromJid, senderDisplay: from, body: String(body), messageId };
+  const senderDisplay =
+    obj.senderDisplay ??
+    obj.pushName ??
+    obj.pushname ??
+    obj.name ??
+    obj.notifyName ??
+    rawFromStr.replace(/@c\.us$|@g\.us$|@broadcast$/i, '');
+  const messageKind = classifyMessageKind(fromJid, Boolean(obj.isStatus));
+  const senderNumber =
+    obj.senderNumber ??
+    obj.phone ??
+    obj.mobile ??
+    obj.msisdn ??
+    (fromJid.endsWith('@c.us') ? fromJid.replace('@c.us', '') : null);
+  const groupName =
+    obj.groupName ??
+    obj.chatName ??
+    obj.conversationName ??
+    obj.groupSubject ??
+    (messageKind === 'group' ? String(senderDisplay) : null);
+  return {
+    fromJid,
+    senderDisplay: String(senderDisplay),
+    senderNumber: senderNumber ? String(senderNumber).replace(/\D/g, '') : null,
+    groupName: groupName ? String(groupName) : null,
+    body: String(body),
+    messageId,
+    messageKind
+  };
 }
 
 app.post(
@@ -582,7 +744,7 @@ app.post(
     const now = Math.floor(Date.now() / 1000);
     for (const msg of messages) {
       try {
-        db.insertMessage(instanceId, msg.messageId, msg.fromJid, msg.senderDisplay, msg.body, now);
+        db.insertMessage(instanceId, msg.messageId, msg.fromJid, msg.senderDisplay, msg.senderNumber, msg.groupName, msg.body, now, 'webhook', msg.messageKind);
       } catch (e) {
         console.error(`[webhook] instance=${instanceId} insertMessage failed:`, e.message);
       }
@@ -602,7 +764,11 @@ app.post(
           isStatus: false,
           isForwarded: false,
           hasQuotedMsg: false,
-          senderDisplay: msg.senderDisplay
+          senderDisplay: msg.senderDisplay,
+          senderNumber: msg.senderNumber,
+          groupName: msg.groupName,
+          source: 'webhook',
+          messageKind: msg.messageKind
         }
       };
       const broadcastResult = broadcastToInstance(instanceId, eventPayload, 'webhook');
@@ -778,12 +944,15 @@ wss.on('connection', (ws, req) => {
         ws._subscribeAuth = authenticatedBySession ? 'session' : 'apikey';
 
         if (whatsappInstances.has(currentInstanceId)) {
-          const instance = whatsappInstances.get(currentInstanceId);
+          const summary = serializeInstance(currentInstanceId, true);
           ws.send(JSON.stringify({
             type: 'status',
             instanceId: currentInstanceId,
-            status: instance.status,
-            qr: instance.qr
+            status: summary.status,
+            qr: summary.qr,
+            linkedAccount: summary.linkedAccount,
+            linkedAccountChanged: summary.linkedAccountChanged,
+            previousLinkedAccount: summary.previousLinkedAccount
           }));
         }
       }
