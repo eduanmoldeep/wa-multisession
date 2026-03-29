@@ -4,6 +4,7 @@
   import Login from './components/Login.svelte';
   import Dashboard from './components/Dashboard.svelte';
   import Docs from './components/Docs.svelte';
+  import Disclaimer from './components/Disclaimer.svelte';
 
   let authenticated = false;
   let user = null;
@@ -43,18 +44,21 @@
   }
 </script>
 
-{#if checking}
-  <div class="container">
-    <div class="card login-card">
-      <p class="subtitle">Checking authentication…</p>
+<div class="app-shell">
+  {#if checking}
+    <div class="container">
+      <div class="card login-card">
+        <p class="subtitle">Checking authentication…</p>
+      </div>
     </div>
-  </div>
-{:else if authenticated}
-  {#if showDocs}
-    <Docs on:back={() => (showDocs = false)} />
+  {:else if authenticated}
+    {#if showDocs}
+      <Docs on:back={() => (showDocs = false)} />
+    {:else}
+      <Dashboard {user} on:logout={onLogout} />
+    {/if}
   {:else}
-    <Dashboard {user} on:logout={onLogout} />
+    <Login on:login={onLogin} />
   {/if}
-{:else}
-  <Login on:login={onLogin} />
-{/if}
+  <Disclaimer />
+</div>

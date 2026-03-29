@@ -2,6 +2,10 @@
 
 A Node.js application for managing multiple WhatsApp Web instances with authentication, real-time QR code updates via WebSockets, and a clean UI.
 
+**Disclaimer:** This is an **unofficial**, **educational** project—not affiliated with WhatsApp or Meta. Misuse (spam, Terms violations, abusive automation) can get your number **blocked or limited**; you are responsible for lawful, policy-compliant use. Software is provided as-is, without warranty.
+
+---
+
 ## Features
 
 - 🔐 **Session-based authentication** - Secure login system
