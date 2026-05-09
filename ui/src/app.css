@@ -14,6 +14,15 @@ body {
   padding: 20px;
 }
 
+.app-shell {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+
 .container {
   width: 100%;
   max-width: 1200px;
