@@ -212,7 +212,7 @@ Generates a new API key; the previous key stops working.
 }
 ```
 
-**Errors:** `400` — `to` and `message` required. `401` — Invalid API key or access. `404` — Instance not found. `503` — Instance not ready (e.g. WhatsApp not connected). `500` — Send failed.
+**Errors:** `400` — `to` and `message` required. `401` — Invalid API key or access. `404` — Instance not found / recipient not registered on WhatsApp. `503` — Instance not ready (e.g. WhatsApp not connected). `500` — Send failed / recipient validation failed.
 
 **Example with API key:**
 
@@ -258,7 +258,7 @@ Send a file with optional text caption. The file is provided as a base64 string.
 }
 ```
 
-**Errors:** `400` — `to`, `filename` and `fileBase64` required / Invalid base64. `401` — Invalid API key or access. `404` — Instance not found. `503` — Instance not ready. `500` — Send failed. `413` — Payload too large (request body over server limit).
+**Errors:** `400` — `to`, `filename` and `fileBase64` required / Invalid base64. `401` — Invalid API key or access. `404` — Instance not found / recipient not registered on WhatsApp. `503` — Instance not ready. `500` — Send failed / recipient validation failed. `413` — Payload too large (request body over server limit).
 
 **Body size limit:** The server limits JSON request body size (default 10mb, configurable via `JSON_BODY_LIMIT`). Base64 is ~1.33× file size, so keep files under ~7.5mb or increase the limit. For large images, resize or compress before sending to avoid 413.
 

@@ -266,7 +266,7 @@ or
 **Errors:**
 - `400` - `to` and `message` required
 - `401` - Invalid API key or access denied
-- `404` - Instance not found
+- `404` - Instance not found / recipient not registered on WhatsApp
 - `503` - Instance not ready (status != `ready`)
 - `500` - Send failed
 
@@ -315,7 +315,7 @@ curl -X POST "http://localhost:3000/api/instances/client1/send-message" \
 **Errors:**
 - `400` - Missing required fields / Invalid base64
 - `401` - Invalid API key or access
-- `404` - Instance not found
+- `404` - Instance not found / recipient not registered on WhatsApp
 - `503` - Instance not ready
 - `500` - Send failed
 

@@ -12,3 +12,5 @@ pnpm-workspace.yaml
 ui/node_modules
 ui/dist
 public
+.sfdx
+.DS_Store

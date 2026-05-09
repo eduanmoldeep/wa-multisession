@@ -517,6 +517,25 @@ function toChatId(to) {
   return s.replace(/\D/g, '') + '@c.us';
 }
 
+/**
+ * Resolve recipient to a chat JID, and for user numbers verify the number exists on WhatsApp.
+ * - Groups (@g.us) are returned as-is (no check).
+ * - Users: calls client.getNumberId(<digits>) and returns its serialized JID.
+ * Returns: { chatId, kind } where kind is 'group' | 'user'
+ */
+async function resolveCheckedChatId(client, to) {
+  const raw = String(to).trim();
+  const chatId = toChatId(raw);
+  if (chatId.endsWith('@g.us')) return { chatId, kind: 'group' };
+
+  const digits = chatId.replace(/@c\.us$/i, '').replace(/\D/g, '');
+  if (!digits) return { chatId: null, kind: 'user' };
+
+  const numberId = await client.getNumberId(digits);
+  if (!numberId?._serialized) return { chatId: null, kind: 'user' };
+  return { chatId: numberId._serialized, kind: 'user' };
+}
+
 // Send message (session or API key auth). Body: { to: string (phone with country code or JID), message: string }
 app.post('/api/instances/:instanceId/send-message', requireInstanceAccess, async (req, res) => {
   const { to, message } = req.body;
@@ -532,8 +551,21 @@ app.post('/api/instances/:instanceId/send-message', requireInstanceAccess, async
     console.log(`[send-message] instance=${instanceId} rejected: not ready (status=${instance?.status})`);
     return res.status(503).json({ error: 'Instance not ready. Wait for WhatsApp to connect.' });
   }
-  const chatId = toChatId(to);
-  console.log(`[send-message] instance=${instanceId} sending to chatId=${chatId}`);
+
+  let resolved;
+  try {
+    resolved = await resolveCheckedChatId(instance.client, to);
+  } catch (err) {
+    console.log(`[send-message] instance=${instanceId} getNumberId failed: ${err.message}`);
+    return res.status(500).json({ error: err.message || 'Failed to validate recipient' });
+  }
+  if (!resolved.chatId) {
+    console.log(`[send-message] instance=${instanceId} rejected: number not on WhatsApp (to=${to})`);
+    return res.status(404).json({ error: 'Number is not registered on WhatsApp' });
+  }
+
+  const chatId = resolved.chatId;
+  console.log(`[send-message] instance=${instanceId} sending to chatId=${chatId} kind=${resolved.kind}`);
   try {
     const sent = await instance.client.sendMessage(chatId, message);
     console.log(`[send-message] instance=${instanceId} to=${chatId} success messageId=${sent.id?._serialized || '(n/a)'}`);
@@ -572,8 +604,21 @@ app.post('/api/instances/:instanceId/send-file', requireInstanceAccess, async (r
   }
   const type = getMimetype(filename, mimetype);
   const media = new MessageMedia(type, data, filename, buffer.length);
-  const chatId = toChatId(to);
-  console.log(`[send-file] instance=${instanceId} sending file to chatId=${chatId} filename=${filename} mimetype=${type} size=${buffer.length} bytes`);
+
+  let resolved;
+  try {
+    resolved = await resolveCheckedChatId(instance.client, to);
+  } catch (err) {
+    console.log(`[send-file] instance=${instanceId} getNumberId failed: ${err.message}`);
+    return res.status(500).json({ error: err.message || 'Failed to validate recipient' });
+  }
+  if (!resolved.chatId) {
+    console.log(`[send-file] instance=${instanceId} rejected: number not on WhatsApp (to=${to})`);
+    return res.status(404).json({ error: 'Number is not registered on WhatsApp' });
+  }
+
+  const chatId = resolved.chatId;
+  console.log(`[send-file] instance=${instanceId} sending file to chatId=${chatId} kind=${resolved.kind} filename=${filename} mimetype=${type} size=${buffer.length} bytes`);
   // Optional caption: request body field "caption" → sendMessage(chatId, media, { caption: '...' })
   const sendOpts = typeof caption === 'string' && caption.length > 0 ? { caption } : {};
   try {
